@@ -24,6 +24,7 @@ public class SegmentService {
     private IDGen idGen;
     private DruidDataSource dataSource;
 
+    // 提出一个init方法去做这些事，而不应该在构造器中做
     public SegmentService() throws SQLException, InitException {
         Properties properties = PropertyFactory.getProperties();
         boolean flag = Boolean.parseBoolean(properties.getProperty(Constants.LEAF_SEGMENT_ENABLE, "true"));
@@ -33,6 +34,13 @@ public class SegmentService {
             dataSource.setUrl(properties.getProperty(Constants.LEAF_JDBC_URL));
             dataSource.setUsername(properties.getProperty(Constants.LEAF_JDBC_USERNAME));
             dataSource.setPassword(properties.getProperty(Constants.LEAF_JDBC_PASSWORD));
+            /**
+             *             并发量上去应设置以下两个参数，代码中却没有？
+             *             dataSource.setMaxActive();
+             *             dataSource.setMinIdle();
+             *
+             */
+
             dataSource.init();
 
             // Config Dao
@@ -41,6 +49,7 @@ public class SegmentService {
             // Config ID Gen
             idGen = new SegmentIDGenImpl();
             ((SegmentIDGenImpl) idGen).setDao(dao);
+            //为什么不在init中catch异常？
             if (idGen.init()) {
                 logger.info("Segment Service Init Successfully");
             } else {

@@ -22,6 +22,7 @@ public class LeafController {
     @Autowired
     private SnowflakeService snowflakeService;
 
+    // RESTFul风格,get是动词不太符合规范。@RequestMapping应改为@GetMapping
     @RequestMapping(value = "/api/segment/get/{key}")
     public String getSegmentId(@PathVariable("key") String key) {
         return get(key, segmentService.getId(key));

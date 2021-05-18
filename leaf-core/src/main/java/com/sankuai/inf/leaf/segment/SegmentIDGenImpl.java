@@ -39,7 +39,7 @@ public class SegmentIDGenImpl implements IDGen {
     private static final long SEGMENT_DURATION = 15 * 60 * 1000L;
     private ExecutorService service = new ThreadPoolExecutor(5, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), new UpdateThreadFactory());
     private volatile boolean initOK = false;
-    private Map<String, SegmentBuffer> cache = new ConcurrentHashMap<String, SegmentBuffer>();
+    private Map<String, SegmentBuffer> cache = new ConcurrentHashMap<String, SegmentBuffer>(); //可以设置一个初始容量，避免频繁扩容
     private IDAllocDao dao;
 
     public static class UpdateThreadFactory implements ThreadFactory {
@@ -67,6 +67,7 @@ public class SegmentIDGenImpl implements IDGen {
     }
 
     private void updateCacheFromDbAtEveryMinute() {
+        // 不建议使用Executors线程池
         ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -76,6 +77,7 @@ public class SegmentIDGenImpl implements IDGen {
                 return t;
             }
         });
+        // 每隔60s（太长，可以用中间件做通知回调 比如etcd） 更新一次 单线程
         service.scheduleWithFixedDelay(new Runnable() {
             @Override
             public void run() {
@@ -88,6 +90,7 @@ public class SegmentIDGenImpl implements IDGen {
         logger.info("update cache from db");
         StopWatch sw = new Slf4JStopWatch();
         try {
+            //拿到所有业务key
             List<String> dbTags = dao.getAllTags();
             if (dbTags == null || dbTags.isEmpty()) {
                 return;
@@ -99,9 +102,10 @@ public class SegmentIDGenImpl implements IDGen {
             for(int i = 0; i < cacheTags.size(); i++){
                 String tmp = cacheTags.get(i);
                 if(insertTagsSet.contains(tmp)){
-                    insertTagsSet.remove(tmp);
+                    insertTagsSet.remove(tmp); // 计算cache与db差集代码太繁琐，并且可以单独封装一个方法
                 }
             }
+
             for (String tag : insertTagsSet) {
                 SegmentBuffer buffer = new SegmentBuffer();
                 buffer.setKey(tag);
@@ -113,10 +117,10 @@ public class SegmentIDGenImpl implements IDGen {
                 logger.info("Add tag {} from db to IdCache, SegmentBuffer {}", tag, buffer);
             }
             //cache中已失效的tags从cache删除
-            for(int i = 0; i < dbTags.size(); i++){
+            for(int i = 0; i < dbTags.size(); i++){ // 代码没有格式化？ if与 ()没空格？
                 String tmp = dbTags.get(i);
                 if(removeTagsSet.contains(tmp)){
-                    removeTagsSet.remove(tmp);
+                    removeTagsSet.remove(tmp); // db不存在的删除
                 }
             }
             for (String tag : removeTagsSet) {
@@ -124,7 +128,7 @@ public class SegmentIDGenImpl implements IDGen {
                 logger.info("Remove tag {} from IdCache", tag);
             }
         } catch (Exception e) {
-            logger.warn("update cache from db exception", e);
+            logger.warn("update cache from db exception", e);  // 线上错误日志kpi? 太骚了 为啥不打error级别
         } finally {
             sw.stop("updateCacheFromDb");
         }
@@ -136,9 +140,9 @@ public class SegmentIDGenImpl implements IDGen {
             return new Result(EXCEPTION_ID_IDCACHE_INIT_FALSE, Status.EXCEPTION);
         }
         if (cache.containsKey(key)) {
-            SegmentBuffer buffer = cache.get(key);
-            if (!buffer.isInitOk()) {
-                synchronized (buffer) {
+            SegmentBuffer buffer = cache.get(key); // 双buffer
+            if (!buffer.isInitOk()) { // 没准备好则更新一次
+                synchronized (buffer) { // 双重锁
                     if (!buffer.isInitOk()) {
                         try {
                             updateSegmentFromDb(key, buffer.getCurrent());
@@ -169,6 +173,7 @@ public class SegmentIDGenImpl implements IDGen {
             buffer.setStep(leafAlloc.getStep());
             buffer.setMinStep(leafAlloc.getStep());//leafAlloc中的step为DB中的step
         } else {
+            // 临时时间：如果机器长时间不用，会导致id很靠前，虽然是唯一的，但id十分滞后
             long duration = System.currentTimeMillis() - buffer.getUpdateTimestamp();
             int nextStep = buffer.getStep();
             if (duration < SEGMENT_DURATION) {
@@ -204,10 +209,11 @@ public class SegmentIDGenImpl implements IDGen {
             buffer.rLock().lock();
             try {
                 final Segment segment = buffer.getCurrent();
+                // if逻辑太复杂，应单独用一个变量抽出来
                 if (!buffer.isNextReady() && (segment.getIdle() < 0.9 * segment.getStep()) && buffer.getThreadRunning().compareAndSet(false, true)) {
                     service.execute(new Runnable() {
                         @Override
-                        public void run() {
+                        public void run() { // 到达90% 异步处理下一个buffer
                             Segment next = buffer.getSegments()[buffer.nextPos()];
                             boolean updateOk = false;
                             try {

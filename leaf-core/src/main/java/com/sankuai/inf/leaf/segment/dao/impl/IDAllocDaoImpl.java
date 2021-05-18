@@ -19,6 +19,7 @@ public class IDAllocDaoImpl implements IDAllocDao {
     SqlSessionFactory sqlSessionFactory;
 
     public IDAllocDaoImpl(DataSource dataSource) {
+        // mybatis 初始化
         TransactionFactory transactionFactory = new JdbcTransactionFactory();
         Environment environment = new Environment("development", transactionFactory, dataSource);
         Configuration configuration = new Configuration(environment);
@@ -40,6 +41,7 @@ public class IDAllocDaoImpl implements IDAllocDao {
     public LeafAlloc updateMaxIdAndGetLeafAlloc(String tag) {
         SqlSession sqlSession = sqlSessionFactory.openSession();
         try {
+            // 如果多个服务 多个线程更新同一个tag，会触发行锁造成阻塞
             sqlSession.update("com.sankuai.inf.leaf.segment.dao.IDAllocMapper.updateMaxId", tag);
             LeafAlloc result = sqlSession.selectOne("com.sankuai.inf.leaf.segment.dao.IDAllocMapper.getLeafAlloc", tag);
             sqlSession.commit();
