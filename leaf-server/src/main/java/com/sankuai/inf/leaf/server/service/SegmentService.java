@@ -35,7 +35,7 @@ public class SegmentService {
             dataSource.setUsername(properties.getProperty(Constants.LEAF_JDBC_USERNAME));
             dataSource.setPassword(properties.getProperty(Constants.LEAF_JDBC_PASSWORD));
             /**
-             *             并发量上去应设置以下两个参数，代码中却没有？
+             *             todo 并发量上去应设置以下两个参数，默认的满足不了某些场景
              *             dataSource.setMaxActive();
              *             dataSource.setMinIdle();
              *
