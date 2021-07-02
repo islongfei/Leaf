@@ -103,7 +103,7 @@ public class SnowflakeIDGenImpl implements IDGen {
     }
 
     protected long timeGen() {
-        return System.currentTimeMillis();
+        return System.currentTimeMillis();// todo System.currentTimeMillis()是否有性能问题，能否再度优化下
     }
 
     public long getWorkerId() {
