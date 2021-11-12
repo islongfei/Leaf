@@ -17,6 +17,7 @@ todo
 #### 总结
 * 再梳理一遍脉络
 * 知识串联， 双buffer的设计思想类似于 redis rehash,快到达阈值刷新buffer类似mysql脏页刷新策略、redis触发aof重写时机。 
+* Leaf 高可用机制 todo
 * https://tech.meituan.com/2017/04/21/mt-leaf.html
 
 [中文文档](./README_CN.md) 
