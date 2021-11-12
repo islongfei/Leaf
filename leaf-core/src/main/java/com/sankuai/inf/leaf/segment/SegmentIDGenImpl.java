@@ -62,12 +62,13 @@ public class SegmentIDGenImpl implements IDGen {
         // 确保加载到kv后才初始化成功
         updateCacheFromDb();
         initOK = true;
+        // 开一个异步线程60s更新一次缓存
         updateCacheFromDbAtEveryMinute();
         return initOK;
     }
 
     private void updateCacheFromDbAtEveryMinute() {
-        // 不建议使用Executors线程池
+        // 不建议使用Executors线程池 why?
         ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -90,7 +91,7 @@ public class SegmentIDGenImpl implements IDGen {
         logger.info("update cache from db");
         StopWatch sw = new Slf4JStopWatch();
         try {
-            //拿到所有业务key
+            //拿到所有业务key "SELECT biz_tag FROM leaf_alloc"
             List<String> dbTags = dao.getAllTags();
             if (dbTags == null || dbTags.isEmpty()) {
                 return;
@@ -98,7 +99,7 @@ public class SegmentIDGenImpl implements IDGen {
             List<String> cacheTags = new ArrayList<String>(cache.keySet());
             Set<String> insertTagsSet = new HashSet<>(dbTags);
             Set<String> removeTagsSet = new HashSet<>(cacheTags);
-            //db中新加的tags灌进cache
+            //db中新加的tags灌进cache，取差集
             for(int i = 0; i < cacheTags.size(); i++){
                 String tmp = cacheTags.get(i);
                 if(insertTagsSet.contains(tmp)){
@@ -120,7 +121,7 @@ public class SegmentIDGenImpl implements IDGen {
             for(int i = 0; i < dbTags.size(); i++){ // 代码没有格式化？ if与 ()没空格？
                 String tmp = dbTags.get(i);
                 if(removeTagsSet.contains(tmp)){
-                    removeTagsSet.remove(tmp); // db不存在的删除
+                    removeTagsSet.remove(tmp); // db不存在的业务key删除
                 }
             }
             for (String tag : removeTagsSet) {
@@ -141,9 +142,9 @@ public class SegmentIDGenImpl implements IDGen {
         }
         if (cache.containsKey(key)) {
             SegmentBuffer buffer = cache.get(key); // 双buffer
-            if (!buffer.isInitOk()) { // 没准备好则更新一次
-                synchronized (buffer) { // 双重锁
-                    if (!buffer.isInitOk()) {
+            if (!buffer.isInitOk()) { // SegmentBuffer没初始化好则更新一次（新建的key还没来得及60s初始化一次）
+                synchronized (buffer) {
+                    if (!buffer.isInitOk()) { // 双检锁
                         try {
                             updateSegmentFromDb(key, buffer.getCurrent());
                             logger.info("Init buffer. Update leafkey {} {} from db", key, buffer.getCurrent());
@@ -167,7 +168,7 @@ public class SegmentIDGenImpl implements IDGen {
             leafAlloc = dao.updateMaxIdAndGetLeafAlloc(key);
             buffer.setStep(leafAlloc.getStep());
             buffer.setMinStep(leafAlloc.getStep());//leafAlloc中的step为DB中的step
-        } else if (buffer.getUpdateTimestamp() == 0) {
+        } else if (buffer.getUpdateTimestamp() == 0) { // 从哪里维护的，为什么要再次判断呢，存在initok但是没有维护这个时间情况吗
             leafAlloc = dao.updateMaxIdAndGetLeafAlloc(key);
             buffer.setUpdateTimestamp(System.currentTimeMillis());
             buffer.setStep(leafAlloc.getStep());
@@ -206,14 +207,14 @@ public class SegmentIDGenImpl implements IDGen {
 
     public Result getIdFromSegmentBuffer(final SegmentBuffer buffer) {
         while (true) {
-            buffer.rLock().lock();
+            buffer.rLock().lock(); // 读写锁：读与读不互斥，读和写互斥，写和写互斥
             try {
                 final Segment segment = buffer.getCurrent();
                 // if逻辑太复杂，应单独用一个变量抽出来
                 if (!buffer.isNextReady() && (segment.getIdle() < 0.9 * segment.getStep()) && buffer.getThreadRunning().compareAndSet(false, true)) {
                     service.execute(new Runnable() {
                         @Override
-                        public void run() { // 到达90% 异步处理下一个buffer
+                        public void run() { // 到达90% 异步处理下一个buffer。避免id池用完了，此时如果有很多线程打在了应用服务器上，等待从数据库获取，会导致挤压很多请求
                             Segment next = buffer.getSegments()[buffer.nextPos()];
                             boolean updateOk = false;
                             try {
@@ -242,7 +243,7 @@ public class SegmentIDGenImpl implements IDGen {
             } finally {
                 buffer.rLock().unlock();
             }
-            waitAndSleep(buffer);
+            waitAndSleep(buffer);//在当前buffer已消费完而另外那个buffer还未从数据库更新完成的时候等待更新动作完成，没消费完的时候前面会直接return id
             buffer.wLock().lock();
             try {
                 final Segment segment = buffer.getCurrent();
@@ -264,14 +265,16 @@ public class SegmentIDGenImpl implements IDGen {
     }
 
     private void waitAndSleep(SegmentBuffer buffer) {
+        //https://github.com/Meituan-Dianping/Leaf/issues/1
         int roll = 0;
         while (buffer.getThreadRunning().get()) {
             roll += 1;
-            if(roll > 10000) {
+            if(roll > 10000) {// 检查10000次（很快）
                 try {
                     TimeUnit.MILLISECONDS.sleep(10);
-                    break;
+                    break; //前面已经留了90%buffer消耗的时间来更新DB了（这部分时间已经是分钟级别的了），其实到了waitAndSleep已经可以算作是异常状态了,检查10000次是最后的尝试了
                 } catch (InterruptedException e) {
+                    // 一个Segment用完了，另外一个还没更新上来，可以判定服务是有异常了
                     logger.warn("Thread {} Interrupted",Thread.currentThread().getName());
                     break;
                 }

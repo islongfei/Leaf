@@ -41,7 +41,8 @@ public class IDAllocDaoImpl implements IDAllocDao {
     public LeafAlloc updateMaxIdAndGetLeafAlloc(String tag) {
         SqlSession sqlSession = sqlSessionFactory.openSession();
         try {
-            // 如果多个服务 多个线程更新同一个tag，会触发行锁造成阻塞
+            // 如果多个服务 多个线程更新同一个tag，会触发行锁造成阻塞，优化方式?
+            // "UPDATE leaf_alloc SET max_id = max_id + step WHERE biz_tag = #{tag}" 更新maxid= maxId+step
             sqlSession.update("com.sankuai.inf.leaf.segment.dao.IDAllocMapper.updateMaxId", tag);
             LeafAlloc result = sqlSession.selectOne("com.sankuai.inf.leaf.segment.dao.IDAllocMapper.getLeafAlloc", tag);
             sqlSession.commit();
