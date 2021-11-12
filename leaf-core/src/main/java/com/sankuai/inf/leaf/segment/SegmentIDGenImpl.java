@@ -214,7 +214,9 @@ public class SegmentIDGenImpl implements IDGen {
                 if (!buffer.isNextReady() && (segment.getIdle() < 0.9 * segment.getStep()) && buffer.getThreadRunning().compareAndSet(false, true)) {
                     service.execute(new Runnable() {
                         @Override
-                        public void run() { // 到达90% 异步处理下一个buffer。避免id池用完了，此时如果有很多线程打在了应用服务器上，等待从数据库获取，会导致挤压很多请求
+                        public void run() {
+                            // Leaf服务内部有两个号段缓存区segment。当前号段已下发10%时，如果下一个号段未更新，则另启一个更新线程去更新下一个号段
+                            // 避免id池用完了，此时如果有很多线程打在了应用服务器上，等待从数据库获取，会导致挤压很多请求
                             Segment next = buffer.getSegments()[buffer.nextPos()];
                             boolean updateOk = false;
                             try {
@@ -272,7 +274,10 @@ public class SegmentIDGenImpl implements IDGen {
             if(roll > 10000) {// 检查10000次（很快）
                 try {
                     TimeUnit.MILLISECONDS.sleep(10);
-                    break; //前面已经留了90%buffer消耗的时间来更新DB了（这部分时间已经是分钟级别的了），其实到了waitAndSleep已经可以算作是异常状态了,检查10000次是最后的尝试了
+                    //前面已经留了90%buffer消耗的时间来更新DB了（这部分时间已经是分钟级别的了），其实到了waitAndSleep已经可以算作是异常状态了,检查10000次是最后的尝试了
+                    // 通常推荐segment长度设置为服务高峰期发号QPS的600倍（10分钟），这样即使DB宕机，Leaf仍能持续发号10-20分钟不受影响。
+                    break;
+                    
                 } catch (InterruptedException e) {
                     // 一个Segment用完了，另外一个还没更新上来，可以判定服务是有异常了
                     logger.warn("Thread {} Interrupted",Thread.currentThread().getName());
